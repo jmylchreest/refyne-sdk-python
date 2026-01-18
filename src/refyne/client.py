@@ -1,0 +1,909 @@
+"""Main Refyne client implementation."""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass, field
+from typing import Any, Generic, TypeVar
+
+import httpx
+
+from refyne.cache import (
+    MemoryCache,
+    create_cache_entry,
+    generate_cache_key,
+    hash_string,
+)
+from refyne.errors import RefyneError, create_error_from_response
+from refyne.interfaces import Cache, DefaultLogger, Logger
+from refyne.types import (
+    AnalyzeRequest,
+    AnalyzeResponse,
+    ApiKeyCreated,
+    ApiKeyList,
+    CrawlJobCreated,
+    CrawlRequest,
+    CreateApiKeyRequest,
+    CreateSchemaRequest,
+    CreateSiteRequest,
+    ExtractRequest,
+    ExtractResponse,
+    ExtractionMetadata,
+    Job,
+    JobList,
+    JobResults,
+    JobStatus,
+    LlmChain,
+    LlmKey,
+    LlmKeyList,
+    ModelList,
+    Schema,
+    SchemaList,
+    SetLlmChainRequest,
+    Site,
+    SiteList,
+    TokenUsage,
+    UpsertLlmKeyRequest,
+    UsageResponse,
+)
+from refyne.version import build_user_agent, check_api_version_compatibility
+
+T = TypeVar("T")
+
+
+@dataclass
+class RefyneConfig:
+    """Configuration options for the Refyne client.
+
+    Attributes:
+        api_key: Your Refyne API key
+        base_url: Base URL for the API (default: https://api.refyne.uk)
+        timeout: Request timeout in seconds (default: 30)
+        max_retries: Maximum retry attempts for failed requests (default: 3)
+        logger: Custom logger implementation
+        cache: Custom cache implementation
+        cache_enabled: Whether caching is enabled (default: True)
+        user_agent_suffix: Custom User-Agent suffix (e.g., "MyApp/1.0")
+        verify_ssl: Whether to verify SSL certificates (default: True)
+    """
+
+    api_key: str
+    base_url: str = "https://api.refyne.uk"
+    timeout: float = 30.0
+    max_retries: int = 3
+    logger: Logger = field(default_factory=DefaultLogger)
+    cache: Cache | None = None
+    cache_enabled: bool = True
+    user_agent_suffix: str | None = None
+    verify_ssl: bool = True
+
+
+class Refyne:
+    """The main Refyne SDK client.
+
+    Provides methods for extracting data from web pages, managing crawl jobs,
+    and configuring LLM providers.
+
+    Example:
+        >>> from refyne import Refyne
+        >>>
+        >>> client = Refyne(api_key="your_api_key")
+        >>>
+        >>> # Extract data from a page
+        >>> result = await client.extract(
+        ...     url="https://example.com/product",
+        ...     schema={"name": "string", "price": "number"},
+        ... )
+        >>> print(result.data)
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str = "https://api.refyne.uk",
+        timeout: float = 30.0,
+        max_retries: int = 3,
+        logger: Logger | None = None,
+        cache: Cache | None = None,
+        cache_enabled: bool = True,
+        user_agent_suffix: str | None = None,
+        verify_ssl: bool = True,
+    ) -> None:
+        """Initialize the Refyne client.
+
+        Args:
+            api_key: Your Refyne API key
+            base_url: Base URL for the API (default: https://api.refyne.uk)
+            timeout: Request timeout in seconds (default: 30)
+            max_retries: Maximum retry attempts for failed requests (default: 3)
+            logger: Custom logger implementation
+            cache: Custom cache implementation
+            cache_enabled: Whether caching is enabled (default: True)
+            user_agent_suffix: Custom User-Agent suffix (e.g., "MyApp/1.0")
+            verify_ssl: Whether to verify SSL certificates (default: True)
+        """
+        self._api_key = api_key
+        self._base_url = base_url.rstrip("/")
+        self._timeout = timeout
+        self._max_retries = max_retries
+        self._logger = logger or DefaultLogger()
+        self._cache: Cache = cache or MemoryCache(logger=self._logger)
+        self._cache_enabled = cache_enabled
+        self._user_agent = build_user_agent(user_agent_suffix)
+        self._verify_ssl = verify_ssl
+
+        # Hash the API key for cache key generation
+        self._auth_hash = hash_string(api_key)
+
+        # Track if we've checked API version
+        self._api_version_checked = False
+
+        # httpx client - created lazily
+        self._http_client: httpx.AsyncClient | None = None
+
+        # Warn about insecure connections
+        if not self._base_url.startswith("https://"):
+            self._logger.warn(
+                "API base URL is not using HTTPS. This is insecure.",
+                {"base_url": self._base_url},
+            )
+
+        if not verify_ssl:
+            self._logger.warn(
+                "SSL certificate verification is disabled. "
+                "This is dangerous and should only be used for development.",
+                {"base_url": self._base_url},
+            )
+
+        # Initialize sub-clients
+        self.jobs = JobsClient(self)
+        self.schemas = SchemasClient(self)
+        self.sites = SitesClient(self)
+        self.keys = KeysClient(self)
+        self.llm = LlmClient(self)
+
+    @classmethod
+    def from_config(cls, config: RefyneConfig) -> "Refyne":
+        """Create a client from a config object.
+
+        Args:
+            config: Configuration object
+
+        Returns:
+            Configured Refyne client
+        """
+        return cls(
+            api_key=config.api_key,
+            base_url=config.base_url,
+            timeout=config.timeout,
+            max_retries=config.max_retries,
+            logger=config.logger,
+            cache=config.cache,
+            cache_enabled=config.cache_enabled,
+            user_agent_suffix=config.user_agent_suffix,
+            verify_ssl=config.verify_ssl,
+        )
+
+    async def _get_http_client(self) -> httpx.AsyncClient:
+        """Get or create the HTTP client."""
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(
+                timeout=self._timeout,
+                verify=self._verify_ssl,
+            )
+        return self._http_client
+
+    async def close(self) -> None:
+        """Close the HTTP client and release resources."""
+        if self._http_client is not None:
+            await self._http_client.aclose()
+            self._http_client = None
+
+    async def __aenter__(self) -> "Refyne":
+        """Async context manager entry."""
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        """Async context manager exit."""
+        await self.close()
+
+    async def extract(
+        self,
+        url: str,
+        schema: dict[str, Any],
+        *,
+        fetch_mode: str | None = None,
+        llm_config: dict[str, Any] | None = None,
+    ) -> ExtractResponse:
+        """Extract structured data from a single web page.
+
+        Args:
+            url: URL to extract data from
+            schema: Schema defining the data structure to extract
+            fetch_mode: Fetch mode (auto, static, or dynamic)
+            llm_config: Custom LLM configuration
+
+        Returns:
+            Extracted data matching the schema
+
+        Example:
+            >>> result = await client.extract(
+            ...     url="https://example.com/product/123",
+            ...     schema={
+            ...         "name": "string",
+            ...         "price": "number",
+            ...         "description": "string",
+            ...     },
+            ... )
+            >>> print(result.data["name"])
+            'Product Name'
+        """
+        body: dict[str, Any] = {"url": url, "schema": schema}
+        if fetch_mode:
+            body["fetchMode"] = fetch_mode
+        if llm_config:
+            body["llmConfig"] = llm_config
+
+        data = await self._request("POST", "/api/v1/extract", body=body)
+        return self._parse_extract_response(data)
+
+    async def crawl(
+        self,
+        url: str,
+        schema: dict[str, Any],
+        *,
+        options: dict[str, Any] | None = None,
+        webhook_url: str | None = None,
+        llm_config: dict[str, Any] | None = None,
+    ) -> CrawlJobCreated:
+        """Start an asynchronous crawl job.
+
+        Args:
+            url: Seed URL to start crawling from
+            schema: Schema defining the data structure to extract
+            options: Crawl options (max_pages, delay, etc.)
+            webhook_url: URL to notify on completion
+            llm_config: Custom LLM configuration
+
+        Returns:
+            Job creation response with job ID
+
+        Example:
+            >>> job = await client.crawl(
+            ...     url="https://example.com/products",
+            ...     schema={"name": "string", "price": "number"},
+            ...     options={"max_pages": 20, "delay": "1s"},
+            ... )
+            >>> print(f"Job started: {job.job_id}")
+        """
+        body: dict[str, Any] = {"url": url, "schema": schema}
+        if options:
+            body["options"] = options
+        if webhook_url:
+            body["webhookUrl"] = webhook_url
+        if llm_config:
+            body["llmConfig"] = llm_config
+
+        data = await self._request("POST", "/api/v1/crawl", body=body)
+        return CrawlJobCreated(
+            job_id=data["jobId"],
+            status=JobStatus(data["status"]),
+            status_url=data["statusUrl"],
+        )
+
+    async def analyze(
+        self,
+        url: str,
+        *,
+        depth: int | None = None,
+    ) -> AnalyzeResponse:
+        """Analyze a website to detect structure and suggest schemas.
+
+        Args:
+            url: URL to analyze
+            depth: Analysis depth (default: 1)
+
+        Returns:
+            Analysis results with suggested schema and patterns
+
+        Example:
+            >>> analysis = await client.analyze(
+            ...     url="https://example.com/products",
+            ...     depth=1,
+            ... )
+            >>> print(analysis.suggested_schema)
+        """
+        body: dict[str, Any] = {"url": url}
+        if depth is not None:
+            body["depth"] = depth
+
+        data = await self._request("POST", "/api/v1/analyze", body=body)
+        return AnalyzeResponse(
+            url=data["url"],
+            suggested_schema=data["suggestedSchema"],
+            follow_patterns=data["followPatterns"],
+        )
+
+    async def get_usage(self) -> UsageResponse:
+        """Get usage statistics for the current billing period.
+
+        Returns:
+            Usage statistics including credits used and remaining
+        """
+        data = await self._request("GET", "/api/v1/usage")
+        return UsageResponse(
+            tier=data["tier"],
+            credits_used=data["creditsUsed"],
+            credits_limit=data["creditsLimit"],
+            credits_remaining=data["creditsRemaining"],
+            period_start=data["periodStart"],
+            period_end=data["periodEnd"],
+        )
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: dict[str, Any] | None = None,
+        skip_cache: bool = False,
+    ) -> dict[str, Any]:
+        """Make an HTTP request to the API.
+
+        Args:
+            method: HTTP method
+            path: API path
+            body: Request body
+            skip_cache: Whether to skip cache lookup
+
+        Returns:
+            Response data as dict
+        """
+        url = f"{self._base_url}{path}"
+        cache_key = generate_cache_key(method, url, self._auth_hash)
+
+        # Check cache for GET requests
+        if method == "GET" and self._cache_enabled and not skip_cache:
+            cached = await self._cache.get(cache_key)
+            if cached:
+                return cached.value
+
+        response = await self._execute_with_retry(method, url, body)
+
+        # Check API version on first request
+        if not self._api_version_checked:
+            api_version = response.headers.get("X-API-Version")
+            if api_version:
+                check_api_version_compatibility(api_version, self._logger)
+            else:
+                self._logger.warn("API did not return X-API-Version header")
+            self._api_version_checked = True
+
+        # Parse response
+        if not response.is_success:
+            raise await create_error_from_response(response)
+
+        data = response.json()
+
+        # Cache GET responses
+        if method == "GET" and self._cache_enabled:
+            cache_control = response.headers.get("Cache-Control")
+            entry = create_cache_entry(data, cache_control)
+            if entry:
+                await self._cache.set(cache_key, entry)
+
+        return data
+
+    async def _execute_with_retry(
+        self,
+        method: str,
+        url: str,
+        body: dict[str, Any] | None = None,
+        attempt: int = 1,
+    ) -> httpx.Response:
+        """Execute a request with retry logic.
+
+        Args:
+            method: HTTP method
+            url: Request URL
+            body: Request body
+            attempt: Current attempt number
+
+        Returns:
+            httpx Response
+        """
+        client = await self._get_http_client()
+
+        try:
+            response = await client.request(
+                method,
+                url,
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                    "User-Agent": self._user_agent,
+                    "Accept": "application/json",
+                },
+                json=body,
+            )
+
+            # Handle rate limiting with retry
+            if response.status_code == 429 and attempt <= self._max_retries:
+                retry_after = int(response.headers.get("Retry-After", "1"))
+                self._logger.warn(
+                    f"Rate limited. Retrying in {retry_after}s",
+                    {"attempt": attempt, "max_retries": self._max_retries},
+                )
+                await asyncio.sleep(retry_after)
+                return await self._execute_with_retry(method, url, body, attempt + 1)
+
+            # Handle server errors with retry
+            if response.status_code >= 500 and attempt <= self._max_retries:
+                backoff = min(2 ** (attempt - 1), 30)
+                self._logger.warn(
+                    f"Server error. Retrying in {backoff}s",
+                    {
+                        "status": response.status_code,
+                        "attempt": attempt,
+                        "max_retries": self._max_retries,
+                    },
+                )
+                await asyncio.sleep(backoff)
+                return await self._execute_with_retry(method, url, body, attempt + 1)
+
+            return response
+
+        except httpx.TimeoutException:
+            raise RefyneError(f"Request timed out after {self._timeout}s", 0)
+
+        except httpx.RequestError as e:
+            # Retry on network errors
+            if attempt <= self._max_retries:
+                backoff = min(2 ** (attempt - 1), 30)
+                self._logger.warn(
+                    f"Network error. Retrying in {backoff}s",
+                    {
+                        "error": str(e),
+                        "attempt": attempt,
+                        "max_retries": self._max_retries,
+                    },
+                )
+                await asyncio.sleep(backoff)
+                return await self._execute_with_retry(method, url, body, attempt + 1)
+
+            raise RefyneError(f"Network error: {e}", 0)
+
+    def _parse_extract_response(self, data: dict[str, Any]) -> ExtractResponse:
+        """Parse extraction response data."""
+        usage = None
+        if "usage" in data and data["usage"]:
+            u = data["usage"]
+            usage = TokenUsage(
+                input_tokens=u["inputTokens"],
+                output_tokens=u["outputTokens"],
+                cost_usd=u["costUsd"],
+                llm_cost_usd=u["llmCostUsd"],
+                is_byok=u["isByok"],
+            )
+
+        metadata = None
+        if "metadata" in data and data["metadata"]:
+            m = data["metadata"]
+            metadata = ExtractionMetadata(
+                fetch_duration_ms=m["fetchDurationMs"],
+                extract_duration_ms=m["extractDurationMs"],
+                model=m["model"],
+                provider=m["provider"],
+            )
+
+        return ExtractResponse(
+            data=data["data"],
+            url=data["url"],
+            fetched_at=data["fetchedAt"],
+            usage=usage,
+            metadata=metadata,
+        )
+
+
+class JobsClient:
+    """Client for job-related operations."""
+
+    def __init__(self, client: Refyne) -> None:
+        """Initialize the jobs client.
+
+        Args:
+            client: Parent Refyne client
+        """
+        self._client = client
+
+    async def list(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> JobList:
+        """List all jobs.
+
+        Args:
+            limit: Maximum number of jobs to return
+            offset: Number of jobs to skip
+
+        Returns:
+            List of jobs
+        """
+        params = []
+        if limit:
+            params.append(f"limit={limit}")
+        if offset:
+            params.append(f"offset={offset}")
+        query = "&".join(params)
+        path = f"/api/v1/jobs{'?' + query if query else ''}"
+
+        data = await self._client._request("GET", path)
+        return JobList(
+            jobs=[self._parse_job(j) for j in data["jobs"]],
+        )
+
+    async def get(self, job_id: str) -> Job:
+        """Get a job by ID.
+
+        Args:
+            job_id: Job ID
+
+        Returns:
+            Job details
+        """
+        data = await self._client._request(
+            "GET", f"/api/v1/jobs/{job_id}", skip_cache=True
+        )
+        return self._parse_job(data)
+
+    async def get_results(
+        self,
+        job_id: str,
+        *,
+        merge: bool = False,
+    ) -> JobResults:
+        """Get job results.
+
+        Args:
+            job_id: Job ID
+            merge: Whether to merge results into single object
+
+        Returns:
+            Job results
+        """
+        path = f"/api/v1/jobs/{job_id}/results"
+        if merge:
+            path += "?merge=true"
+
+        data = await self._client._request("GET", path, skip_cache=True)
+        return JobResults(
+            job_id=data["jobId"],
+            status=JobStatus(data["status"]),
+            page_count=data["pageCount"],
+            results=data.get("results"),
+            merged=data.get("merged"),
+        )
+
+    async def get_results_merged(self, job_id: str) -> dict[str, Any]:
+        """Get merged results as a single object.
+
+        Args:
+            job_id: Job ID
+
+        Returns:
+            Merged results dict
+        """
+        results = await self.get_results(job_id, merge=True)
+        return results.merged or {}
+
+    def _parse_job(self, data: dict[str, Any]) -> Job:
+        """Parse job data."""
+        return Job(
+            id=data["id"],
+            type=data["type"],
+            status=JobStatus(data["status"]),
+            url=data["url"],
+            page_count=data["pageCount"],
+            token_usage_input=data["tokenUsageInput"],
+            token_usage_output=data["tokenUsageOutput"],
+            cost_credits=data["costCredits"],
+            created_at=data["createdAt"],
+            error_message=data.get("errorMessage"),
+            started_at=data.get("startedAt"),
+            completed_at=data.get("completedAt"),
+        )
+
+
+class SchemasClient:
+    """Client for schema catalog operations."""
+
+    def __init__(self, client: Refyne) -> None:
+        """Initialize the schemas client."""
+        self._client = client
+
+    async def list(self) -> SchemaList:
+        """List all schemas (user + platform)."""
+        data = await self._client._request("GET", "/api/v1/schemas")
+        return SchemaList(
+            schemas=[self._parse_schema(s) for s in data["schemas"]],
+        )
+
+    async def get(self, schema_id: str) -> Schema:
+        """Get a schema by ID."""
+        data = await self._client._request("GET", f"/api/v1/schemas/{schema_id}")
+        return self._parse_schema(data)
+
+    async def create(
+        self,
+        name: str,
+        schema_yaml: str,
+        *,
+        description: str | None = None,
+        category: str | None = None,
+    ) -> Schema:
+        """Create a new schema."""
+        body: dict[str, Any] = {"name": name, "schemaYaml": schema_yaml}
+        if description:
+            body["description"] = description
+        if category:
+            body["category"] = category
+
+        data = await self._client._request("POST", "/api/v1/schemas", body=body)
+        return self._parse_schema(data)
+
+    async def update(
+        self,
+        schema_id: str,
+        *,
+        name: str | None = None,
+        schema_yaml: str | None = None,
+        description: str | None = None,
+        category: str | None = None,
+    ) -> Schema:
+        """Update a schema."""
+        body: dict[str, Any] = {}
+        if name:
+            body["name"] = name
+        if schema_yaml:
+            body["schemaYaml"] = schema_yaml
+        if description:
+            body["description"] = description
+        if category:
+            body["category"] = category
+
+        data = await self._client._request(
+            "PUT", f"/api/v1/schemas/{schema_id}", body=body
+        )
+        return self._parse_schema(data)
+
+    async def delete(self, schema_id: str) -> None:
+        """Delete a schema."""
+        await self._client._request("DELETE", f"/api/v1/schemas/{schema_id}")
+
+    def _parse_schema(self, data: dict[str, Any]) -> Schema:
+        """Parse schema data."""
+        return Schema(
+            id=data["id"],
+            name=data["name"],
+            schema_yaml=data["schemaYaml"],
+            created_at=data["createdAt"],
+            updated_at=data["updatedAt"],
+            description=data.get("description"),
+            category=data.get("category"),
+        )
+
+
+class SitesClient:
+    """Client for saved sites operations."""
+
+    def __init__(self, client: Refyne) -> None:
+        """Initialize the sites client."""
+        self._client = client
+
+    async def list(self) -> SiteList:
+        """List all saved sites."""
+        data = await self._client._request("GET", "/api/v1/sites")
+        return SiteList(
+            sites=[self._parse_site(s) for s in data["sites"]],
+        )
+
+    async def get(self, site_id: str) -> Site:
+        """Get a site by ID."""
+        data = await self._client._request("GET", f"/api/v1/sites/{site_id}")
+        return self._parse_site(data)
+
+    async def create(
+        self,
+        name: str,
+        url: str,
+        *,
+        schema_id: str | None = None,
+        crawl_options: dict[str, Any] | None = None,
+    ) -> Site:
+        """Create a new saved site."""
+        body: dict[str, Any] = {"name": name, "url": url}
+        if schema_id:
+            body["schemaId"] = schema_id
+        if crawl_options:
+            body["crawlOptions"] = crawl_options
+
+        data = await self._client._request("POST", "/api/v1/sites", body=body)
+        return self._parse_site(data)
+
+    async def update(
+        self,
+        site_id: str,
+        *,
+        name: str | None = None,
+        url: str | None = None,
+        schema_id: str | None = None,
+        crawl_options: dict[str, Any] | None = None,
+    ) -> Site:
+        """Update a saved site."""
+        body: dict[str, Any] = {}
+        if name:
+            body["name"] = name
+        if url:
+            body["url"] = url
+        if schema_id:
+            body["schemaId"] = schema_id
+        if crawl_options:
+            body["crawlOptions"] = crawl_options
+
+        data = await self._client._request("PUT", f"/api/v1/sites/{site_id}", body=body)
+        return self._parse_site(data)
+
+    async def delete(self, site_id: str) -> None:
+        """Delete a saved site."""
+        await self._client._request("DELETE", f"/api/v1/sites/{site_id}")
+
+    def _parse_site(self, data: dict[str, Any]) -> Site:
+        """Parse site data."""
+        return Site(
+            id=data["id"],
+            name=data["name"],
+            url=data["url"],
+            created_at=data["createdAt"],
+            schema_id=data.get("schemaId"),
+            crawl_options=data.get("crawlOptions"),
+        )
+
+
+class KeysClient:
+    """Client for API key management."""
+
+    def __init__(self, client: Refyne) -> None:
+        """Initialize the keys client."""
+        self._client = client
+
+    async def list(self) -> ApiKeyList:
+        """List all API keys."""
+        data = await self._client._request("GET", "/api/v1/keys")
+        return ApiKeyList(
+            keys=[
+                self._parse_key(k)
+                for k in data["keys"]
+            ],
+        )
+
+    async def create(self, name: str) -> ApiKeyCreated:
+        """Create a new API key."""
+        data = await self._client._request("POST", "/api/v1/keys", body={"name": name})
+        return ApiKeyCreated(
+            id=data["id"],
+            name=data["name"],
+            key=data["key"],
+        )
+
+    async def revoke(self, key_id: str) -> None:
+        """Revoke an API key."""
+        await self._client._request("DELETE", f"/api/v1/keys/{key_id}")
+
+    def _parse_key(self, data: dict[str, Any]) -> Any:
+        """Parse API key data."""
+        from refyne.types import ApiKey
+
+        return ApiKey(
+            id=data["id"],
+            name=data["name"],
+            prefix=data["prefix"],
+            created_at=data["createdAt"],
+            last_used_at=data.get("lastUsedAt"),
+        )
+
+
+class LlmClient:
+    """Client for LLM configuration."""
+
+    def __init__(self, client: Refyne) -> None:
+        """Initialize the LLM client."""
+        self._client = client
+
+    async def list_providers(self) -> dict[str, list[str]]:
+        """List available LLM providers."""
+        return await self._client._request("GET", "/api/v1/llm/providers")
+
+    async def list_keys(self) -> LlmKeyList:
+        """List configured provider keys (BYOK)."""
+        data = await self._client._request("GET", "/api/v1/llm/keys")
+        return LlmKeyList(
+            keys=[self._parse_llm_key(k) for k in data["keys"]],
+        )
+
+    async def upsert_key(
+        self,
+        provider: str,
+        api_key: str,
+        default_model: str,
+        *,
+        base_url: str | None = None,
+        is_enabled: bool | None = None,
+    ) -> LlmKey:
+        """Add or update a provider key."""
+        body: dict[str, Any] = {
+            "provider": provider,
+            "apiKey": api_key,
+            "defaultModel": default_model,
+        }
+        if base_url:
+            body["baseUrl"] = base_url
+        if is_enabled is not None:
+            body["isEnabled"] = is_enabled
+
+        data = await self._client._request("PUT", "/api/v1/llm/keys", body=body)
+        return self._parse_llm_key(data)
+
+    async def delete_key(self, key_id: str) -> None:
+        """Delete a provider key."""
+        await self._client._request("DELETE", f"/api/v1/llm/keys/{key_id}")
+
+    async def get_chain(self) -> LlmChain:
+        """Get the fallback chain configuration."""
+        data = await self._client._request("GET", "/api/v1/llm/chain")
+        from refyne.types import LlmChainEntry
+
+        return LlmChain(
+            chain=[
+                LlmChainEntry(
+                    provider=e["provider"],
+                    model=e["model"],
+                    id=e.get("id"),
+                    position=e.get("position"),
+                    is_enabled=e.get("isEnabled"),
+                )
+                for e in data["chain"]
+            ],
+        )
+
+    async def set_chain(
+        self,
+        chain: list[dict[str, Any]],
+    ) -> None:
+        """Set the fallback chain configuration."""
+        await self._client._request("PUT", "/api/v1/llm/chain", body={"chain": chain})
+
+    async def list_models(self, provider: str) -> ModelList:
+        """List available models for a provider."""
+        data = await self._client._request("GET", f"/api/v1/llm/models/{provider}")
+        from refyne.types import Model
+
+        return ModelList(
+            models=[
+                Model(id=m["id"], name=m["name"])
+                for m in data["models"]
+            ],
+        )
+
+    def _parse_llm_key(self, data: dict[str, Any]) -> LlmKey:
+        """Parse LLM key data."""
+        return LlmKey(
+            id=data["id"],
+            provider=data["provider"],
+            default_model=data["defaultModel"],
+            is_enabled=data["isEnabled"],
+            created_at=data["createdAt"],
+            base_url=data.get("baseUrl"),
+        )
