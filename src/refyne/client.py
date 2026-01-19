@@ -333,12 +333,9 @@ class Refyne:
         """
         data = await self._request("GET", "/api/v1/usage")
         return UsageResponse(
-            tier=data["tier"],
-            credits_used=data["creditsUsed"],
-            credits_limit=data["creditsLimit"],
-            credits_remaining=data["creditsRemaining"],
-            period_start=data["periodStart"],
-            period_end=data["periodEnd"],
+            total_jobs=data["total_jobs"],
+            total_charged_usd=data["total_charged_usd"],
+            byok_jobs=data["byok_jobs"],
         )
 
     async def _request(
@@ -580,9 +577,9 @@ class JobsClient:
 
         data = await self._client._request("GET", path, skip_cache=True)
         return JobResults(
-            job_id=data["jobId"],
+            job_id=data["job_id"],
             status=JobStatus(data["status"]),
-            page_count=data["pageCount"],
+            page_count=data["page_count"],
             results=data.get("results"),
             merged=data.get("merged"),
         )
@@ -606,14 +603,15 @@ class JobsClient:
             type=data["type"],
             status=JobStatus(data["status"]),
             url=data["url"],
-            page_count=data["pageCount"],
-            token_usage_input=data["tokenUsageInput"],
-            token_usage_output=data["tokenUsageOutput"],
-            cost_credits=data["costCredits"],
-            created_at=data["createdAt"],
-            error_message=data.get("errorMessage"),
-            started_at=data.get("startedAt"),
-            completed_at=data.get("completedAt"),
+            urls_queued=data["urls_queued"],
+            page_count=data["page_count"],
+            token_usage_input=data["token_usage_input"],
+            token_usage_output=data["token_usage_output"],
+            cost_usd=data["cost_usd"],
+            created_at=data["created_at"],
+            error_message=data.get("error_message"),
+            started_at=data.get("started_at"),
+            completed_at=data.get("completed_at"),
         )
 
 

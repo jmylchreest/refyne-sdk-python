@@ -298,10 +298,11 @@ class Job:
         type: Job type
         status: Current status
         url: Seed URL
+        urls_queued: Number of URLs queued
         page_count: Number of pages processed
         token_usage_input: Input tokens used
         token_usage_output: Output tokens used
-        cost_credits: Cost in credits
+        cost_usd: Cost in USD
         error_message: Error message if failed
         started_at: When the job started
         completed_at: When the job completed
@@ -312,10 +313,11 @@ class Job:
     type: str
     status: JobStatus
     url: str
+    urls_queued: int
     page_count: int
     token_usage_input: int
     token_usage_output: int
-    cost_credits: float
+    cost_usd: float
     created_at: str
     error_message: str | None = None
     started_at: str | None = None
@@ -483,20 +485,14 @@ class UsageResponse:
     """Usage statistics.
 
     Attributes:
-        tier: User's tier
-        credits_used: Credits used this period
-        credits_limit: Credit limit
-        credits_remaining: Credits remaining
-        period_start: Period start date
-        period_end: Period end date
+        total_jobs: Total number of jobs
+        total_charged_usd: Total USD charged for usage
+        byok_jobs: Jobs using user's own API keys (not charged)
     """
 
-    tier: str
-    credits_used: float
-    credits_limit: float
-    credits_remaining: float
-    period_start: str
-    period_end: str
+    total_jobs: int
+    total_charged_usd: float
+    byok_jobs: int
 
 
 @dataclass
