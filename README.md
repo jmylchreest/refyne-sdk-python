@@ -252,6 +252,32 @@ ruff check src tests
 mypy src
 ```
 
+## Testing with Demo Site
+
+A demo site is available at [demo.refyne.uk](https://demo.refyne.uk) for testing SDK functionality. The site contains realistic data across multiple content types:
+
+| Endpoint | Content Type | Example Use Case |
+|----------|--------------|------------------|
+| `https://demo.refyne.uk/products` | Product catalog | Extract prices, descriptions, ratings |
+| `https://demo.refyne.uk/jobs` | Job listings | Extract salaries, requirements, companies |
+| `https://demo.refyne.uk/blog` | Blog posts | Extract articles, authors, tags |
+| `https://demo.refyne.uk/news` | News articles | Extract headlines, sources, timestamps |
+
+Example:
+
+```python
+result = await client.extract(
+    url="https://demo.refyne.uk/products/1",
+    schema={
+        "name": "string",
+        "price": "number",
+        "description": "string",
+        "brand": "string",
+        "rating": "number",
+    },
+)
+```
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
