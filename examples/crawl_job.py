@@ -11,7 +11,7 @@ Usage:
 import asyncio
 import os
 
-from refyne import Refyne, JobStatus
+from refyne import JobStatus, Refyne
 
 
 async def main() -> None:

@@ -8,7 +8,7 @@ version = "0.0.0"
 description = "Official Python SDK for the Refyne API - LLM-powered web extraction"
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     { name = "Refyne", email = "support@refyne.uk" },
 ]
@@ -26,7 +26,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -37,6 +36,7 @@ classifiers = [
 ]
 dependencies = [
     "httpx>=0.25.0",
+    "pydantic>=2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -47,11 +47,12 @@ dev = [
     "mypy>=1.0.0",
     "ruff>=0.1.0",
     "respx>=0.20.0",
+    "datamodel-code-generator[ruff]>=0.25.0",
 ]
 
 [project.urls]
-Homepage = "https://docs.refyne.uk/docs/sdks/python"
-Documentation = "https://docs.refyne.uk/docs/sdks/python"
+Homepage = "https://refyne.uk/docs/sdks/python"
+Documentation = "https://refyne.uk/docs/sdks/python"
 Repository = "https://github.com/jmylchreest/refyne-sdk-python"
 Issues = "https://github.com/jmylchreest/refyne-sdk-python/issues"
 
@@ -74,7 +75,19 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "D", "UP", "ANN"]
-ignore = ["ANN101", "D100", "D104"]
+# ANN101 - self type annotation (removed rule)
+# ANN401 - Any type (common in SDK code handling dynamic JSON)
+# D100 - module docstring
+# D104 - package docstring
+ignore = ["ANN101", "ANN401", "D100", "D104"]
+
+[tool.ruff.lint.per-file-ignores]
+# Generated types don't need docstrings, and may have long lines
+"src/refyne/types.py" = ["D101", "D102", "D103", "E501"]
+# Examples are less strict
+"examples/*.py" = ["D", "ANN", "I001", "E501"]
+# Scripts are less strict
+"scripts/*.py" = ["D", "E501"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

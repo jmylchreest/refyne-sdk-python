@@ -1,8 +1,6 @@
 """Tests for the version module."""
 
-import pytest
 
-from refyne.errors import UnsupportedAPIVersionError
 from refyne.interfaces import DefaultLogger
 from refyne.version import (
     MAX_KNOWN_API_VERSION,

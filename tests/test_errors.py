@@ -1,6 +1,5 @@
 """Tests for the errors module."""
 
-import pytest
 
 from refyne.errors import (
     AuthenticationError,

@@ -6,7 +6,7 @@ import time
 from collections import OrderedDict
 from typing import Any
 
-from refyne.interfaces import Cache, CacheControlDirectives, CacheEntry, Logger
+from refyne.interfaces import CacheControlDirectives, CacheEntry, Logger
 
 
 def parse_cache_control(header: str | None) -> CacheControlDirectives:

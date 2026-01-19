@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Generic, TypeVar
+from typing import Any, TypeVar
 
 import httpx
 
@@ -17,21 +17,13 @@ from refyne.cache import (
 from refyne.errors import RefyneError, create_error_from_response
 from refyne.interfaces import Cache, DefaultLogger, Logger
 from refyne.types import (
-    AnalyzeRequest,
     AnalyzeResponse,
     ApiKeyCreated,
     ApiKeyList,
     CrawlJobCreated,
-    CrawlRequest,
-    CreateApiKeyRequest,
-    CreateSchemaRequest,
-    CreateSiteRequest,
-    ExtractRequest,
     ExtractResponse,
-    ExtractionMetadata,
     Job,
     JobList,
-    JobResults,
     JobStatus,
     LlmChain,
     LlmKey,
@@ -39,13 +31,32 @@ from refyne.types import (
     ModelList,
     Schema,
     SchemaList,
-    SetLlmChainRequest,
     Site,
     SiteList,
-    TokenUsage,
-    UpsertLlmKeyRequest,
     UsageResponse,
 )
+
+
+@dataclass
+class JobResultEntry:
+    """A single result entry from a crawl job."""
+
+    id: str
+    url: str
+    data: dict[str, Any]
+
+
+@dataclass
+class JobResults:
+    """Response from the job results endpoint."""
+
+    job_id: str
+    status: str
+    page_count: int
+    results: list[JobResultEntry] | None = None
+    merged: dict[str, Any] | None = None
+
+
 from refyne.version import build_user_agent, check_api_version_compatibility
 
 T = TypeVar("T")
@@ -164,7 +175,7 @@ class Refyne:
         self.llm = LlmClient(self)
 
     @classmethod
-    def from_config(cls, config: RefyneConfig) -> "Refyne":
+    def from_config(cls, config: RefyneConfig) -> Refyne:
         """Create a client from a config object.
 
         Args:
@@ -200,7 +211,7 @@ class Refyne:
             await self._http_client.aclose()
             self._http_client = None
 
-    async def __aenter__(self) -> "Refyne":
+    async def __aenter__(self) -> Refyne:
         """Async context manager entry."""
         return self
 
@@ -286,11 +297,7 @@ class Refyne:
             body["llmConfig"] = llm_config
 
         data = await self._request("POST", "/api/v1/crawl", body=body)
-        return CrawlJobCreated(
-            job_id=data["jobId"],
-            status=JobStatus(data["status"]),
-            status_url=data["statusUrl"],
-        )
+        return CrawlJobCreated.model_validate(data)
 
     async def analyze(
         self,
@@ -318,12 +325,10 @@ class Refyne:
         if depth is not None:
             body["depth"] = depth
 
+        from refyne.types import AnalyzeResponseBody
+
         data = await self._request("POST", "/api/v1/analyze", body=body)
-        return AnalyzeResponse(
-            url=data["url"],
-            suggested_schema=data["suggestedSchema"],
-            follow_patterns=data["followPatterns"],
-        )
+        return AnalyzeResponseBody.model_validate(data)
 
     async def get_usage(self) -> UsageResponse:
         """Get usage statistics for the current billing period.
@@ -331,12 +336,10 @@ class Refyne:
         Returns:
             Usage statistics including credits used and remaining
         """
+        from refyne.types import GetUsageOutputBody
+
         data = await self._request("GET", "/api/v1/usage")
-        return UsageResponse(
-            total_jobs=data["total_jobs"],
-            total_charged_usd=data["total_charged_usd"],
-            byok_jobs=data["byok_jobs"],
-        )
+        return GetUsageOutputBody.model_validate(data)
 
     async def _request(
         self,
@@ -473,34 +476,9 @@ class Refyne:
 
     def _parse_extract_response(self, data: dict[str, Any]) -> ExtractResponse:
         """Parse extraction response data."""
-        usage = None
-        if "usage" in data and data["usage"]:
-            u = data["usage"]
-            usage = TokenUsage(
-                input_tokens=u["inputTokens"],
-                output_tokens=u["outputTokens"],
-                cost_usd=u["costUsd"],
-                llm_cost_usd=u["llmCostUsd"],
-                is_byok=u["isByok"],
-            )
+        from refyne.types import ExtractOutputBody
 
-        metadata = None
-        if "metadata" in data and data["metadata"]:
-            m = data["metadata"]
-            metadata = ExtractionMetadata(
-                fetch_duration_ms=m["fetchDurationMs"],
-                extract_duration_ms=m["extractDurationMs"],
-                model=m["model"],
-                provider=m["provider"],
-            )
-
-        return ExtractResponse(
-            data=data["data"],
-            url=data["url"],
-            fetched_at=data["fetchedAt"],
-            usage=usage,
-            metadata=metadata,
-        )
+        return ExtractOutputBody.model_validate(data)
 
 
 class JobsClient:
@@ -537,10 +515,10 @@ class JobsClient:
         query = "&".join(params)
         path = f"/api/v1/jobs{'?' + query if query else ''}"
 
+        from refyne.types import ListJobsOutputBody
+
         data = await self._client._request("GET", path)
-        return JobList(
-            jobs=[self._parse_job(j) for j in data["jobs"]],
-        )
+        return ListJobsOutputBody.model_validate(data)
 
     async def get(self, job_id: str) -> Job:
         """Get a job by ID.
@@ -551,10 +529,12 @@ class JobsClient:
         Returns:
             Job details
         """
+        from refyne.types import JobResponse
+
         data = await self._client._request(
             "GET", f"/api/v1/jobs/{job_id}", skip_cache=True
         )
-        return self._parse_job(data)
+        return JobResponse.model_validate(data)
 
     async def get_results(
         self,
@@ -576,11 +556,18 @@ class JobsClient:
             path += "?merge=true"
 
         data = await self._client._request("GET", path, skip_cache=True)
+        # Parse results entries if present
+        results = None
+        if data.get("results"):
+            results = [
+                JobResultEntry(id=r["id"], url=r["url"], data=r["data"])
+                for r in data["results"]
+            ]
         return JobResults(
             job_id=data["job_id"],
-            status=JobStatus(data["status"]),
+            status=data["status"],
             page_count=data["page_count"],
-            results=data.get("results"),
+            results=results,
             merged=data.get("merged"),
         )
 
@@ -596,25 +583,6 @@ class JobsClient:
         results = await self.get_results(job_id, merge=True)
         return results.merged or {}
 
-    def _parse_job(self, data: dict[str, Any]) -> Job:
-        """Parse job data."""
-        return Job(
-            id=data["id"],
-            type=data["type"],
-            status=JobStatus(data["status"]),
-            url=data["url"],
-            urls_queued=data["urls_queued"],
-            page_count=data["page_count"],
-            token_usage_input=data["token_usage_input"],
-            token_usage_output=data["token_usage_output"],
-            cost_usd=data["cost_usd"],
-            created_at=data["created_at"],
-            error_message=data.get("error_message"),
-            started_at=data.get("started_at"),
-            completed_at=data.get("completed_at"),
-        )
-
-
 class SchemasClient:
     """Client for schema catalog operations."""
 
@@ -624,15 +592,17 @@ class SchemasClient:
 
     async def list(self) -> SchemaList:
         """List all schemas (user + platform)."""
+        from refyne.types import ListSchemasOutputBody
+
         data = await self._client._request("GET", "/api/v1/schemas")
-        return SchemaList(
-            schemas=[self._parse_schema(s) for s in data["schemas"]],
-        )
+        return ListSchemasOutputBody.model_validate(data)
 
     async def get(self, schema_id: str) -> Schema:
         """Get a schema by ID."""
+        from refyne.types import SchemaOutput
+
         data = await self._client._request("GET", f"/api/v1/schemas/{schema_id}")
-        return self._parse_schema(data)
+        return SchemaOutput.model_validate(data)
 
     async def create(
         self,
@@ -643,14 +613,16 @@ class SchemasClient:
         category: str | None = None,
     ) -> Schema:
         """Create a new schema."""
-        body: dict[str, Any] = {"name": name, "schemaYaml": schema_yaml}
+        from refyne.types import SchemaOutput
+
+        body: dict[str, Any] = {"name": name, "schema_yaml": schema_yaml}
         if description:
             body["description"] = description
         if category:
             body["category"] = category
 
         data = await self._client._request("POST", "/api/v1/schemas", body=body)
-        return self._parse_schema(data)
+        return SchemaOutput.model_validate(data)
 
     async def update(
         self,
@@ -662,11 +634,13 @@ class SchemasClient:
         category: str | None = None,
     ) -> Schema:
         """Update a schema."""
+        from refyne.types import SchemaOutput
+
         body: dict[str, Any] = {}
         if name:
             body["name"] = name
         if schema_yaml:
-            body["schemaYaml"] = schema_yaml
+            body["schema_yaml"] = schema_yaml
         if description:
             body["description"] = description
         if category:
@@ -675,23 +649,11 @@ class SchemasClient:
         data = await self._client._request(
             "PUT", f"/api/v1/schemas/{schema_id}", body=body
         )
-        return self._parse_schema(data)
+        return SchemaOutput.model_validate(data)
 
     async def delete(self, schema_id: str) -> None:
         """Delete a schema."""
         await self._client._request("DELETE", f"/api/v1/schemas/{schema_id}")
-
-    def _parse_schema(self, data: dict[str, Any]) -> Schema:
-        """Parse schema data."""
-        return Schema(
-            id=data["id"],
-            name=data["name"],
-            schema_yaml=data["schemaYaml"],
-            created_at=data["createdAt"],
-            updated_at=data["updatedAt"],
-            description=data.get("description"),
-            category=data.get("category"),
-        )
 
 
 class SitesClient:
@@ -703,15 +665,17 @@ class SitesClient:
 
     async def list(self) -> SiteList:
         """List all saved sites."""
+        from refyne.types import ListSavedSitesOutputBody
+
         data = await self._client._request("GET", "/api/v1/sites")
-        return SiteList(
-            sites=[self._parse_site(s) for s in data["sites"]],
-        )
+        return ListSavedSitesOutputBody.model_validate(data)
 
     async def get(self, site_id: str) -> Site:
         """Get a site by ID."""
+        from refyne.types import SavedSiteOutput
+
         data = await self._client._request("GET", f"/api/v1/sites/{site_id}")
-        return self._parse_site(data)
+        return SavedSiteOutput.model_validate(data)
 
     async def create(
         self,
@@ -722,14 +686,16 @@ class SitesClient:
         crawl_options: dict[str, Any] | None = None,
     ) -> Site:
         """Create a new saved site."""
+        from refyne.types import SavedSiteOutput
+
         body: dict[str, Any] = {"name": name, "url": url}
         if schema_id:
-            body["schemaId"] = schema_id
+            body["default_schema_id"] = schema_id
         if crawl_options:
-            body["crawlOptions"] = crawl_options
+            body["crawl_options"] = crawl_options
 
         data = await self._client._request("POST", "/api/v1/sites", body=body)
-        return self._parse_site(data)
+        return SavedSiteOutput.model_validate(data)
 
     async def update(
         self,
@@ -741,33 +707,24 @@ class SitesClient:
         crawl_options: dict[str, Any] | None = None,
     ) -> Site:
         """Update a saved site."""
+        from refyne.types import SavedSiteOutput
+
         body: dict[str, Any] = {}
         if name:
             body["name"] = name
         if url:
             body["url"] = url
         if schema_id:
-            body["schemaId"] = schema_id
+            body["default_schema_id"] = schema_id
         if crawl_options:
-            body["crawlOptions"] = crawl_options
+            body["crawl_options"] = crawl_options
 
         data = await self._client._request("PUT", f"/api/v1/sites/{site_id}", body=body)
-        return self._parse_site(data)
+        return SavedSiteOutput.model_validate(data)
 
     async def delete(self, site_id: str) -> None:
         """Delete a saved site."""
         await self._client._request("DELETE", f"/api/v1/sites/{site_id}")
-
-    def _parse_site(self, data: dict[str, Any]) -> Site:
-        """Parse site data."""
-        return Site(
-            id=data["id"],
-            name=data["name"],
-            url=data["url"],
-            created_at=data["createdAt"],
-            schema_id=data.get("schemaId"),
-            crawl_options=data.get("crawlOptions"),
-        )
 
 
 class KeysClient:
@@ -779,38 +736,21 @@ class KeysClient:
 
     async def list(self) -> ApiKeyList:
         """List all API keys."""
+        from refyne.types import ListKeysOutputBody
+
         data = await self._client._request("GET", "/api/v1/keys")
-        return ApiKeyList(
-            keys=[
-                self._parse_key(k)
-                for k in data["keys"]
-            ],
-        )
+        return ListKeysOutputBody.model_validate(data)
 
     async def create(self, name: str) -> ApiKeyCreated:
         """Create a new API key."""
+        from refyne.types import CreateKeyOutputBody
+
         data = await self._client._request("POST", "/api/v1/keys", body={"name": name})
-        return ApiKeyCreated(
-            id=data["id"],
-            name=data["name"],
-            key=data["key"],
-        )
+        return CreateKeyOutputBody.model_validate(data)
 
     async def revoke(self, key_id: str) -> None:
         """Revoke an API key."""
         await self._client._request("DELETE", f"/api/v1/keys/{key_id}")
-
-    def _parse_key(self, data: dict[str, Any]) -> Any:
-        """Parse API key data."""
-        from refyne.types import ApiKey
-
-        return ApiKey(
-            id=data["id"],
-            name=data["name"],
-            prefix=data["prefix"],
-            created_at=data["createdAt"],
-            last_used_at=data.get("lastUsedAt"),
-        )
 
 
 class LlmClient:
@@ -820,16 +760,19 @@ class LlmClient:
         """Initialize the LLM client."""
         self._client = client
 
-    async def list_providers(self) -> dict[str, list[str]]:
+    async def list_providers(self) -> Any:
         """List available LLM providers."""
-        return await self._client._request("GET", "/api/v1/llm/providers")
+        from refyne.types import ListProvidersOutputBody
+
+        data = await self._client._request("GET", "/api/v1/llm/providers")
+        return ListProvidersOutputBody.model_validate(data)
 
     async def list_keys(self) -> LlmKeyList:
         """List configured provider keys (BYOK)."""
+        from refyne.types import ListUserServiceKeysOutputBody
+
         data = await self._client._request("GET", "/api/v1/llm/keys")
-        return LlmKeyList(
-            keys=[self._parse_llm_key(k) for k in data["keys"]],
-        )
+        return ListUserServiceKeysOutputBody.model_validate(data)
 
     async def upsert_key(
         self,
@@ -841,18 +784,20 @@ class LlmClient:
         is_enabled: bool | None = None,
     ) -> LlmKey:
         """Add or update a provider key."""
+        from refyne.types import UserServiceKeyResponse
+
         body: dict[str, Any] = {
             "provider": provider,
-            "apiKey": api_key,
-            "defaultModel": default_model,
+            "api_key": api_key,
+            "default_model": default_model,
         }
         if base_url:
-            body["baseUrl"] = base_url
+            body["base_url"] = base_url
         if is_enabled is not None:
-            body["isEnabled"] = is_enabled
+            body["is_enabled"] = is_enabled
 
         data = await self._client._request("PUT", "/api/v1/llm/keys", body=body)
-        return self._parse_llm_key(data)
+        return UserServiceKeyResponse.model_validate(data)
 
     async def delete_key(self, key_id: str) -> None:
         """Delete a provider key."""
@@ -860,21 +805,10 @@ class LlmClient:
 
     async def get_chain(self) -> LlmChain:
         """Get the fallback chain configuration."""
-        data = await self._client._request("GET", "/api/v1/llm/chain")
-        from refyne.types import LlmChainEntry
+        from refyne.types import GetUserFallbackChainOutputBody
 
-        return LlmChain(
-            chain=[
-                LlmChainEntry(
-                    provider=e["provider"],
-                    model=e["model"],
-                    id=e.get("id"),
-                    position=e.get("position"),
-                    is_enabled=e.get("isEnabled"),
-                )
-                for e in data["chain"]
-            ],
-        )
+        data = await self._client._request("GET", "/api/v1/llm/chain")
+        return GetUserFallbackChainOutputBody.model_validate(data)
 
     async def set_chain(
         self,
@@ -885,23 +819,7 @@ class LlmClient:
 
     async def list_models(self, provider: str) -> ModelList:
         """List available models for a provider."""
+        from refyne.types import UserListModelsOutputBody
+
         data = await self._client._request("GET", f"/api/v1/llm/models/{provider}")
-        from refyne.types import Model
-
-        return ModelList(
-            models=[
-                Model(id=m["id"], name=m["name"])
-                for m in data["models"]
-            ],
-        )
-
-    def _parse_llm_key(self, data: dict[str, Any]) -> LlmKey:
-        """Parse LLM key data."""
-        return LlmKey(
-            id=data["id"],
-            provider=data["provider"],
-            default_model=data["defaultModel"],
-            is_enabled=data["isEnabled"],
-            created_at=data["createdAt"],
-            base_url=data.get("baseUrl"),
-        )
+        return UserListModelsOutputBody.model_validate(data)

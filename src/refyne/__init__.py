@@ -1,5 +1,4 @@
-"""
-Official Python SDK for the Refyne API.
+"""Official Python SDK for the Refyne API.
 
 Refyne is an LLM-powered web extraction API that transforms unstructured
 websites into clean, typed data.
@@ -16,57 +15,56 @@ Example:
     >>> print(result.data)
 """
 
-from refyne.client import Refyne, RefyneConfig
+from refyne.cache import MemoryCache, create_cache_entry, parse_cache_control
+from refyne.client import JobResultEntry, JobResults, Refyne, RefyneConfig
 from refyne.errors import (
-    RefyneError,
-    RateLimitError,
-    ValidationError,
     AuthenticationError,
     ForbiddenError,
     NotFoundError,
-    UnsupportedAPIVersionError,
+    RateLimitError,
+    RefyneError,
     TLSError,
+    UnsupportedAPIVersionError,
+    ValidationError,
 )
+from refyne.interfaces import Cache, CacheEntry, HttpClient, Logger
 from refyne.types import (
-    ExtractRequest,
-    ExtractResponse,
-    CrawlRequest,
-    CrawlJobCreated,
-    CrawlOptions,
-    Job,
-    JobStatus,
-    JobList,
-    JobResults,
     AnalyzeRequest,
     AnalyzeResponse,
-    Schema,
-    SchemaList,
-    CreateSchemaRequest,
-    Site,
-    SiteList,
-    CreateSiteRequest,
     ApiKey,
-    ApiKeyList,
     ApiKeyCreated,
+    ApiKeyList,
+    CrawlJobCreated,
+    CrawlOptions,
+    CrawlRequest,
     CreateApiKeyRequest,
-    UsageResponse,
-    LlmKey,
-    LlmKeyList,
-    UpsertLlmKeyRequest,
+    CreateSchemaRequest,
+    CreateSiteRequest,
+    ExtractionMetadata,
+    ExtractRequest,
+    ExtractResponse,
+    Job,
+    JobList,
+    JobStatus,
     LlmChain,
     LlmChainEntry,
-    SetLlmChainRequest,
-    ModelList,
-    TokenUsage,
-    ExtractionMetadata,
     LlmConfig,
+    LlmKey,
+    LlmKeyList,
+    ModelList,
+    Schema,
+    SchemaList,
+    SetLlmChainRequest,
+    Site,
+    SiteList,
+    TokenUsage,
+    UpsertLlmKeyRequest,
+    UsageResponse,
 )
-from refyne.interfaces import Logger, HttpClient, Cache, CacheEntry
-from refyne.cache import MemoryCache, parse_cache_control, create_cache_entry
 from refyne.version import (
-    SDK_VERSION,
-    MIN_API_VERSION,
     MAX_KNOWN_API_VERSION,
+    MIN_API_VERSION,
+    SDK_VERSION,
 )
 
 __version__ = SDK_VERSION
@@ -94,6 +92,7 @@ __all__ = [
     "JobStatus",
     "JobList",
     "JobResults",
+    "JobResultEntry",
     "AnalyzeRequest",
     "AnalyzeResponse",
     "Schema",

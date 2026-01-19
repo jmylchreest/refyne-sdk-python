@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Full SDK Demo - Tests all major functionality
+"""Full SDK Demo - Tests all major functionality
 
 Install dependencies: pip install rich httpx
 Run with: python examples/full_demo.py
@@ -23,12 +22,17 @@ except ImportError:
 # Add src to path for development
 sys.path.insert(0, 'src')
 
-from refyne import Refyne, RefyneError
-from refyne.version import SDK_VERSION, MIN_API_VERSION, MAX_KNOWN_API_VERSION
+# Configuration - Override with environment variables for local development
+import os
 
-# Configuration
-API_KEY = "YOUR_API_KEY"
-BASE_URL = "http://localhost:8080"
+from refyne import Refyne, RefyneError
+from refyne.version import MAX_KNOWN_API_VERSION, MIN_API_VERSION, SDK_VERSION
+
+API_KEY = os.environ.get("REFYNE_API_KEY")
+if not API_KEY:
+    print("Error: REFYNE_API_KEY environment variable is required")
+    sys.exit(1)
+BASE_URL = os.environ.get("REFYNE_BASE_URL", "https://api.refyne.uk")
 TEST_URL = "https://www.bbc.co.uk/news"
 
 console = Console()
@@ -171,8 +175,12 @@ async def main() -> None:
                 analysis = await client.analyze(url=TEST_URL)
                 progress.remove_task(task)
                 success("Website analysis complete")
-                suggested_schema = analysis.suggested_schema
-                info("Suggested Schema", "")
+                # suggested_schema is a YAML string - display it and use fallback dict
+                info("Suggested Schema (YAML)", "")
+                console.print(f"[dim]{analysis.suggested_schema}[/dim]")
+                # Use a simple dict schema for extraction demo
+                suggested_schema = {"headline": "string", "summary": "string"}
+                info("Using simplified schema for demo", "")
                 print_json(suggested_schema)
             except RefyneError as e:
                 progress.remove_task(task)
@@ -324,7 +332,12 @@ async def main() -> None:
             if results.results:
                 info("Total Results", str(len(results.results)))
                 console.print()
-                print_json(results.results)
+                # Convert dataclasses to dicts for display
+                results_data = [
+                    {"id": r.id, "url": r.url, "data": r.data}
+                    for r in results.results
+                ]
+                print_json(results_data)
             else:
                 warn("No results available")
 

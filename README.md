@@ -1,6 +1,8 @@
 # Refyne SDK for Python
 
-Official Python SDK for the [Refyne API](https://docs.refyne.uk) - LLM-powered web extraction that transforms unstructured websites into clean, typed data.
+Official Python SDK for the [Refyne API](https://refyne.uk/docs) - LLM-powered web extraction that transforms unstructured websites into clean, typed data.
+
+**API Endpoint**: `https://api.refyne.uk` | **Documentation**: [refyne.uk/docs](https://refyne.uk/docs)
 
 [![PyPI version](https://badge.fury.io/py/refyne.svg)](https://pypi.org/project/refyne/)
 [![CI](https://github.com/jmylchreest/refyne-sdk-python/actions/workflows/test.yml/badge.svg)](https://github.com/jmylchreest/refyne-sdk-python/actions/workflows/test.yml)
