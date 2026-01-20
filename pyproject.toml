@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "refyne"
-version = "0.0.0"
+version = "0.0.1"
 description = "Official Python SDK for the Refyne API - LLM-powered web extraction"
 readme = "README.md"
 license = { text = "MIT" }
