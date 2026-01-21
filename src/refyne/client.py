@@ -24,7 +24,6 @@ from refyne.types import (
     ExtractResponse,
     Job,
     JobList,
-    JobStatus,
     LlmChain,
     LlmKey,
     LlmKeyList,
@@ -35,6 +34,7 @@ from refyne.types import (
     SiteList,
     UsageResponse,
 )
+from refyne.version import build_user_agent, check_api_version_compatibility
 
 
 @dataclass
@@ -55,9 +55,6 @@ class JobResults:
     page_count: int
     results: list[JobResultEntry] | None = None
     merged: dict[str, Any] | None = None
-
-
-from refyne.version import build_user_agent, check_api_version_compatibility
 
 T = TypeVar("T")
 
