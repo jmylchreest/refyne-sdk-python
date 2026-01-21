@@ -49,9 +49,14 @@ def compare_versions(a: str, b: str) -> int:
     va = parse_version(a)
     vb = parse_version(b)
 
-    for i in range(3):  # Compare major, minor, patch
-        if va[i] != vb[i]:
-            return -1 if va[i] < vb[i] else 1
+    # Compare major, minor, patch explicitly to satisfy mypy
+    # (tuple indexing with a variable returns a union type)
+    if va[0] != vb[0]:
+        return -1 if va[0] < vb[0] else 1
+    if va[1] != vb[1]:
+        return -1 if va[1] < vb[1] else 1
+    if va[2] != vb[2]:
+        return -1 if va[2] < vb[2] else 1
 
     return 0
 

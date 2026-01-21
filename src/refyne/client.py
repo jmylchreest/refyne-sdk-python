@@ -362,7 +362,7 @@ class Refyne:
         if method == "GET" and self._cache_enabled and not skip_cache:
             cached = await self._cache.get(cache_key)
             if cached:
-                return dict(cached.value)  # type: ignore[arg-type]
+                return dict(cached.value)
 
         response = await self._execute_with_retry(method, url, body)
 
