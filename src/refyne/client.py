@@ -333,10 +333,8 @@ class Refyne:
         Returns:
             Usage statistics including credits used and remaining
         """
-        from refyne.types import GetUsageOutputBody
-
         data = await self._request("GET", "/api/v1/usage")
-        return GetUsageOutputBody.model_validate(data)
+        return UsageResponse.model_validate(data)
 
     async def _request(
         self,
@@ -364,7 +362,7 @@ class Refyne:
         if method == "GET" and self._cache_enabled and not skip_cache:
             cached = await self._cache.get(cache_key)
             if cached:
-                return cached.value
+                return dict(cached.value)  # type: ignore[arg-type]
 
         response = await self._execute_with_retry(method, url, body)
 
@@ -381,7 +379,7 @@ class Refyne:
         if not response.is_success:
             raise await create_error_from_response(response)
 
-        data = response.json()
+        data: dict[str, Any] = response.json()
 
         # Cache GET responses
         if method == "GET" and self._cache_enabled:
