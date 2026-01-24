@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "refyne"
-version = "0.1.0"
+version = "0.1.1"
 description = "Official Python SDK for the Refyne API - LLM-powered web extraction"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -40,13 +40,13 @@ ignore_errors = true
 target-version = "py310"
 line-length = 100
 
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-testpaths = [ "tests",]
-
 [tool.ruff.lint]
 select = [ "E", "F", "I", "N", "W", "D", "UP", "ANN",]
 ignore = [ "ANN101", "ANN401", "D100", "D104",]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = [ "tests",]
 
 [tool.ruff.lint.per-file-ignores]
 "src/refyne/types.py" = [ "D101", "D102", "D103", "E501",]
