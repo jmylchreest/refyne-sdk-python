@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import time
 from collections import OrderedDict
 from typing import Any
@@ -68,21 +69,15 @@ def generate_cache_key(method: str, url: str, auth_hash: str | None = None) -> s
 
 
 def hash_string(s: str) -> str:
-    """Simple hash function for auth tokens.
-
-    This isn't cryptographically secure, but it's fine for cache key differentiation.
+    """Hash a string using SHA-256 (truncated to 16 chars for cache keys).
 
     Args:
         s: String to hash
 
     Returns:
-        Hash string
+        Truncated SHA-256 hash string (16 chars, 64 bits of entropy)
     """
-    h = 0
-    for char in s:
-        h = ((h << 5) - h) + ord(char)
-        h = h & 0xFFFFFFFF  # Convert to 32-bit integer
-    return format(h, "x")
+    return hashlib.sha256(s.encode()).hexdigest()[:16]
 
 
 def create_cache_entry(

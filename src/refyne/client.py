@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
+from urllib.parse import urlencode
 
 import httpx
 
@@ -17,22 +19,22 @@ from refyne.cache import (
 from refyne.errors import RefyneError, create_error_from_response
 from refyne.interfaces import Cache, DefaultLogger, Logger
 from refyne.types import (
-    AnalyzeResponse,
-    ApiKeyCreated,
-    ApiKeyList,
-    CrawlJobCreated,
-    ExtractResponse,
-    Job,
-    JobList,
-    LlmChain,
-    LlmKey,
-    LlmKeyList,
-    ModelList,
-    Schema,
-    SchemaList,
-    Site,
-    SiteList,
-    UsageResponse,
+    AnalyzeResponseBody as AnalyzeResponse,
+    CreateKeyOutputBody as ApiKeyCreated,
+    CrawlJobResponseBody as CrawlJobCreated,
+    ExtractOutputBody as ExtractResponse,
+    GetUsageOutputBody as UsageResponse,
+    GetUserFallbackChainOutputBody as LlmChain,
+    JobResponse as Job,
+    ListJobsOutputBody as JobList,
+    ListKeysOutputBody as ApiKeyList,
+    ListSavedSitesOutputBody as SiteList,
+    ListSchemasOutputBody as SchemaList,
+    ListUserServiceKeysOutputBody as LlmKeyList,
+    SavedSiteOutput as Site,
+    SchemaOutput as Schema,
+    ListModelsOutputBody as ModelList,
+    UserServiceKeyResponse as LlmKey,
 )
 from refyne.version import build_user_agent, check_api_version_compatibility
 
@@ -435,9 +437,9 @@ class Refyne:
 
             # Handle server errors with retry
             if response.status_code >= 500 and attempt <= self._max_retries:
-                backoff = min(2 ** (attempt - 1), 30)
+                backoff = self._calculate_backoff(attempt)
                 self._logger.warn(
-                    f"Server error. Retrying in {backoff}s",
+                    f"Server error. Retrying in {backoff:.2f}s",
                     {
                         "status": response.status_code,
                         "attempt": attempt,
@@ -455,9 +457,9 @@ class Refyne:
         except httpx.RequestError as e:
             # Retry on network errors
             if attempt <= self._max_retries:
-                backoff = min(2 ** (attempt - 1), 30)
+                backoff = self._calculate_backoff(attempt)
                 self._logger.warn(
-                    f"Network error. Retrying in {backoff}s",
+                    f"Network error. Retrying in {backoff:.2f}s",
                     {
                         "error": str(e),
                         "attempt": attempt,
@@ -468,6 +470,21 @@ class Refyne:
                 return await self._execute_with_retry(method, url, body, attempt + 1)
 
             raise RefyneError(f"Network error: {e}", 0)
+
+    def _calculate_backoff(self, attempt: int) -> float:
+        """Calculate exponential backoff with jitter.
+
+        Args:
+            attempt: Current attempt number (1-based)
+
+        Returns:
+            Backoff duration in seconds with jitter applied
+        """
+        # Exponential backoff: 2^(attempt-1) seconds
+        base_backoff = min(2 ** (attempt - 1), 30)
+        # Add jitter: random value between 0% and 25% of the backoff
+        jitter = random.random() * 0.25 * base_backoff
+        return base_backoff + jitter
 
     def _parse_extract_response(self, data: dict[str, Any]) -> ExtractResponse:
         """Parse extraction response data."""
@@ -502,12 +519,12 @@ class JobsClient:
         Returns:
             List of jobs
         """
-        params = []
-        if limit:
-            params.append(f"limit={limit}")
-        if offset:
-            params.append(f"offset={offset}")
-        query = "&".join(params)
+        params: dict[str, int] = {}
+        if limit is not None:
+            params["limit"] = limit
+        if offset is not None:
+            params["offset"] = offset
+        query = urlencode(params) if params else ""
         path = f"/api/v1/jobs{'?' + query if query else ''}"
 
         from refyne.types import ListJobsOutputBody
