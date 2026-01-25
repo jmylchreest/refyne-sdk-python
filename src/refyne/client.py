@@ -172,6 +172,7 @@ class Refyne:
         self.sites = SitesClient(self)
         self.keys = KeysClient(self)
         self.llm = LlmClient(self)
+        self.webhooks = WebhooksClient(self)
 
     @classmethod
     def from_config(cls, config: RefyneConfig) -> Refyne:
@@ -337,6 +338,30 @@ class Refyne:
         """
         data = await self._request("GET", "/api/v1/usage")
         return UsageResponse.model_validate(data)
+
+    async def health(self) -> dict[str, Any]:
+        """Check API health status.
+
+        Returns:
+            Health check response with status and version
+        """
+        return await self._request("GET", "/api/v1/health")
+
+    async def list_cleaners(self) -> dict[str, Any]:
+        """List available content cleaners.
+
+        Returns:
+            List of cleaners with their options
+        """
+        return await self._request("GET", "/api/v1/cleaners")
+
+    async def get_pricing_tiers(self) -> dict[str, Any]:
+        """Get available pricing tiers and their limits.
+
+        Returns:
+            List of pricing tiers with limits
+        """
+        return await self._request("GET", "/api/v1/pricing/tiers")
 
     async def _request(
         self,
@@ -595,6 +620,50 @@ class JobsClient:
         results = await self.get_results(job_id, merge=True)
         return results.merged or {}
 
+    async def download(self, job_id: str) -> dict[str, Any]:
+        """Get a presigned download URL for job results.
+
+        Args:
+            job_id: Job ID
+
+        Returns:
+            Download URL response
+        """
+        return await self._client._request("GET", f"/api/v1/jobs/{job_id}/download")
+
+    async def get_crawl_map(self, job_id: str) -> dict[str, Any]:
+        """Get the crawl map for a job.
+
+        Args:
+            job_id: Job ID
+
+        Returns:
+            Crawl map with page URLs and status
+        """
+        return await self._client._request("GET", f"/api/v1/jobs/{job_id}/crawl-map")
+
+    async def get_debug_capture(self, job_id: str) -> dict[str, Any]:
+        """Get debug capture data for a job.
+
+        Args:
+            job_id: Job ID
+
+        Returns:
+            Debug capture data
+        """
+        return await self._client._request("GET", f"/api/v1/jobs/{job_id}/debug-capture")
+
+    async def get_webhook_deliveries(self, job_id: str) -> dict[str, Any]:
+        """Get webhook deliveries for a job.
+
+        Args:
+            job_id: Job ID
+
+        Returns:
+            Webhook deliveries
+        """
+        return await self._client._request("GET", f"/api/v1/jobs/{job_id}/webhooks")
+
 class SchemasClient:
     """Client for schema catalog operations."""
 
@@ -835,3 +904,106 @@ class LlmClient:
 
         data = await self._client._request("GET", f"/api/v1/llm/models/{provider}")
         return UserListModelsOutputBody.model_validate(data)
+
+
+class WebhooksClient:
+    """Client for webhook management."""
+
+    def __init__(self, client: Refyne) -> None:
+        """Initialize the webhooks client."""
+        self._client = client
+
+    async def list(self) -> dict[str, Any]:
+        """List all webhooks."""
+        return await self._client._request("GET", "/api/v1/webhooks")
+
+    async def get(self, webhook_id: str) -> dict[str, Any]:
+        """Get a webhook by ID."""
+        return await self._client._request("GET", f"/api/v1/webhooks/{webhook_id}")
+
+    async def create(
+        self,
+        name: str,
+        url: str,
+        *,
+        events: list[str] | None = None,
+        is_active: bool = True,
+        secret: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a new webhook.
+
+        Args:
+            name: Webhook name
+            url: Webhook URL
+            events: Event types to subscribe to
+            is_active: Whether the webhook is active
+            secret: Secret for HMAC-SHA256 signature
+        """
+        body: dict[str, Any] = {"name": name, "url": url, "is_active": is_active}
+        if events:
+            body["events"] = events
+        if secret:
+            body["secret"] = secret
+        return await self._client._request("POST", "/api/v1/webhooks", body=body)
+
+    async def update(
+        self,
+        webhook_id: str,
+        *,
+        name: str | None = None,
+        url: str | None = None,
+        events: list[str] | None = None,
+        is_active: bool | None = None,
+        secret: str | None = None,
+    ) -> dict[str, Any]:
+        """Update a webhook.
+
+        Args:
+            webhook_id: Webhook ID
+            name: Webhook name
+            url: Webhook URL
+            events: Event types to subscribe to
+            is_active: Whether the webhook is active
+            secret: Secret for HMAC-SHA256 signature
+        """
+        body: dict[str, Any] = {}
+        if name is not None:
+            body["name"] = name
+        if url is not None:
+            body["url"] = url
+        if events is not None:
+            body["events"] = events
+        if is_active is not None:
+            body["is_active"] = is_active
+        if secret is not None:
+            body["secret"] = secret
+        return await self._client._request(
+            "PUT", f"/api/v1/webhooks/{webhook_id}", body=body
+        )
+
+    async def delete(self, webhook_id: str) -> None:
+        """Delete a webhook."""
+        await self._client._request("DELETE", f"/api/v1/webhooks/{webhook_id}")
+
+    async def list_deliveries(
+        self,
+        webhook_id: str,
+        *,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> dict[str, Any]:
+        """List webhook deliveries.
+
+        Args:
+            webhook_id: Webhook ID
+            limit: Maximum number of deliveries to return
+            offset: Number of deliveries to skip
+        """
+        params: dict[str, int] = {}
+        if limit is not None:
+            params["limit"] = limit
+        if offset is not None:
+            params["offset"] = offset
+        query = urlencode(params) if params else ""
+        path = f"/api/v1/webhooks/{webhook_id}/deliveries{'?' + query if query else ''}"
+        return await self._client._request("GET", path)
