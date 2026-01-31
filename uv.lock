@@ -908,7 +908,7 @@ wheels = [
 
 [[package]]
 name = "refyne"
-version = "0.1.5"
+version = "0.1.46"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -926,6 +926,11 @@ dev = [
     { name = "ruff" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "datamodel-code-generator" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "datamodel-code-generator", extras = ["ruff"], marker = "extra == 'dev'", specifier = ">=0.25.0" },
@@ -939,6 +944,9 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
 ]
 provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "datamodel-code-generator", specifier = ">=0.53.0" }]
 
 [[package]]
 name = "respx"

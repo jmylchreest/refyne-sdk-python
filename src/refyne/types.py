@@ -732,6 +732,7 @@ class JobResponse(BaseModel):
     error_message: str | None = None
     id: str
     page_count: int
+    queue_position: int
     started_at: str | None = None
     status: str
     token_usage_input: int
@@ -1532,6 +1533,11 @@ class CrawlJobResponseBody(BaseModel):
         None,
         description="Number of pages successfully extracted (sync mode)",
         examples=[5],
+    )
+    queue_position: int | None = Field(
+        None,
+        description="Position in queue (1-indexed, only for pending jobs)",
+        examples=[3],
     )
     status: str = Field(
         ...,
