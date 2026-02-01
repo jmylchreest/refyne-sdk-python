@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "refyne"
-version = "0.1.46"
+version = "0.1.47"
 description = "Official Python SDK for the Refyne API - LLM-powered web extraction"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -14,6 +14,9 @@ dependencies = [ "httpx>=0.25.0", "pydantic>=2.0.0",]
 [[project.authors]]
 name = "Refyne"
 email = "support@refyne.uk"
+
+[dependency-groups]
+dev = [ "datamodel-code-generator>=0.53.0",]
 
 [project.license]
 text = "MIT"
@@ -58,8 +61,3 @@ convention = "google"
 
 [tool.hatch.build.targets.wheel]
 packages = [ "src/refyne",]
-
-[dependency-groups]
-dev = [
-    "datamodel-code-generator>=0.53.0",
-]
